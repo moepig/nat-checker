@@ -64,3 +64,94 @@ func TestSTUNMessageDecoding(t *testing.T) {
 
 	assert.Equal(t, BindingResponse, msg.MessageType, "Wrong message type")
 }
+
+func TestExtractErrorCode(t *testing.T) {
+	tests := []struct {
+		name         string
+		attrValue    []byte
+		expectedCode int
+		expectedMsg  string
+	}{
+		{
+			name:         "Error 420 - Unknown Attribute",
+			attrValue:    []byte{0x00, 0x00, 0x04, 0x14, 'U', 'n', 'k', 'n', 'o', 'w', 'n', ' ', 'A', 't', 't', 'r', 'i', 'b', 'u', 't', 'e'},
+			expectedCode: 420,
+			expectedMsg:  "Unknown Attribute",
+		},
+		{
+			name:         "Error 400 - Bad Request",
+			attrValue:    []byte{0x00, 0x00, 0x04, 0x00, 'B', 'a', 'd', ' ', 'R', 'e', 'q', 'u', 'e', 's', 't'},
+			expectedCode: 400,
+			expectedMsg:  "Bad Request",
+		},
+		{
+			name:         "Error 500 - Server Error",
+			attrValue:    []byte{0x00, 0x00, 0x05, 0x00},
+			expectedCode: 500,
+			expectedMsg:  "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			msg := &STUNMessage{
+				MessageType:   BindingErrorResponse,
+				TransactionID: [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				Attributes: []STUNAttribute{
+					{
+						Type:   ErrorCode,
+						Length: uint16(len(test.attrValue)),
+						Value:  test.attrValue,
+					},
+				},
+			}
+
+			code, reason := extractErrorCode(msg)
+			assert.Equal(t, test.expectedCode, code, "Unexpected error code")
+			assert.Equal(t, test.expectedMsg, reason, "Unexpected error message")
+		})
+	}
+}
+
+func TestIsChangeRequestUnsupportedError(t *testing.T) {
+	tests := []struct {
+		name       string
+		errorCode  int
+		shouldFail bool
+	}{
+		{
+			name:       "Error 420 - CHANGE-REQUEST unsupported",
+			errorCode:  420,
+			shouldFail: true,
+		},
+		{
+			name:       "Error 400 - Other error",
+			errorCode:  400,
+			shouldFail: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// エラーコードを構築
+			class := test.errorCode / 100
+			number := test.errorCode % 100
+			attrValue := []byte{0x00, 0x00, byte(class), byte(number)}
+
+			msg := &STUNMessage{
+				MessageType:   BindingErrorResponse,
+				TransactionID: [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				Attributes: []STUNAttribute{
+					{
+						Type:   ErrorCode,
+						Length: 4,
+						Value:  attrValue,
+					},
+				},
+			}
+
+			result := isChangeRequestUnsupportedError(msg)
+			assert.Equal(t, test.shouldFail, result)
+		})
+	}
+}

@@ -152,13 +152,15 @@ func TestCheckMappingTypeIntegration(t *testing.T) {
 		t.Skip("Skipping integration test. Set INTEGRATION=1 to run.")
 	}
 
-	// 複数のSTUNサーバーを試す
-	serverPairs := []string{"stun.cloudflare.com", "stun1.l.google.com"}
+	// 異なるIPアドレスのSTUNサーバーを使用してマッピング判定
+	// Address-Dependent Mappingを正しく検出するには異なるサーバーが必要
+	serverA := "stun.cloudflare.com"
+	serverB := "stun1.l.google.com"
 
 	var result *CheckMappingResult
 	var err error
-	
-	result, err = CheckMappingType(serverPairs[0], serverPairs[1])
+
+	result, err = CheckMappingType(serverA, serverB)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -180,6 +182,9 @@ func TestCheckMappingTypeIntegration(t *testing.T) {
 	assert.NotNil(t, result.Response.MappingA2.IP)
 	assert.Greater(t, result.Response.MappingA2.Port, 0)
 
+	t.Logf("=== Mapping Detection Test ===")
+	t.Logf("Server A: %s", serverA)
+	t.Logf("Server B: %s", serverB)
 	t.Logf("Detected NAT mapping type: %s", result.NATType)
 	t.Logf("MappingA1: %s", result.Response.MappingA1)
 	t.Logf("MappingB1: %s", result.Response.MappingB1)
@@ -193,21 +198,20 @@ func TestCheckFilteringBehaviorIntegration(t *testing.T) {
 	}
 
 	// RFC 5780対応のSTUNサーバーを試す
-	// 注意: ほとんどの公開STUNサーバーはRFC 5780に完全対応していないため、
-	//       FilteringUnknownが返されることが多い（これは正常な動作）
+	// stunserver2025.stunprotocol.org は RFC 5780 (Stuntman実装) に対応
 	servers := []string{
-		"stun.cloudflare.com",
-		"stun1.l.google.com",
-		"stun.ekiga.net",
+		"stunserver2025.stunprotocol.org",
 	}
 
 	var result *CheckFilteringResult
 	var err error
+	var usedServer string
 
 	// いずれかのサーバーで成功するまで試す
 	for _, server := range servers {
 		result, err = CheckFilteringBehavior(server)
 		if err == nil {
+			usedServer = server
 			break
 		}
 		t.Logf("Server %s failed: %v", server, err)
@@ -216,6 +220,8 @@ func TestCheckFilteringBehaviorIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
+	t.Logf("=== Filtering Detection Test ===")
+	t.Logf("Server: %s", usedServer)
 	t.Logf("Filtering Type: %s", result.FilteringType)
 	t.Logf("Supports CHANGE-REQUEST: %v", result.ServerSupport.SupportsChangeRequest)
 	t.Logf("Supports OTHER-ADDRESS: %v", result.ServerSupport.SupportsOtherAddress)
@@ -243,13 +249,20 @@ func TestFullNATDetectionIntegration(t *testing.T) {
 		t.Skip("Skipping integration test. Set INTEGRATION=1 to run.")
 	}
 
-	serverPairs := []string{"stun.cloudflare.com", "stun1.l.google.com"}
+	// Mapping判定: 異なるIPアドレスのサーバーを使用（正確な判定のため）
+	// Filtering判定: FullNATDetection内で serverA を使用（RFC 5780対応サーバー）
+	serverA := "stunserver2025.stunprotocol.org"
+	serverB := "stun.cloudflare.com"
 
-	result, err := FullNATDetection(serverPairs[0], serverPairs[1])
+	result, err := FullNATDetection(serverA, serverB)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	t.Logf("=== Full NAT Detection Result ===")
+	t.Logf("Mapping Server A: %s", serverA)
+	t.Logf("Mapping Server B: %s", serverB)
+	t.Logf("Filtering Server: %s", serverA)
+	t.Logf("")
 	t.Logf("Detailed Type: %s", result.DetailedType)
 	t.Logf("Legacy Name: %s", result.DetailedType.LegacyName())
 	t.Logf("\n--- Mapping ---")

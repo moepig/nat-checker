@@ -286,11 +286,17 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 
 	// Test II でエラーレスポンス（エラーコード420等）を受信した場合
 	// CHANGE-REQUEST非対応サーバーと判断し、フィルタリング判定は不可能
-	if testIIErr != nil && testIIErr.Error() != "" {
-		// タイムアウトエラーではなく、明示的なエラーの場合
-		result.FilteringType = FilteringUnknown
-		result.ServerSupport.SupportsChangeRequest = false
-		return result, nil
+	// ただし、タイムアウトエラーの場合は Test III に進む必要がある
+	if testIIErr != nil {
+		// タイムアウトエラーかどうかをチェック
+		if netErr, ok := testIIErr.(net.Error); ok && netErr.Timeout() {
+			// タイムアウトの場合は Test III に進む（正常な動作）
+		} else {
+			// STUN エラーレスポンス（420等）の場合はサーバー非対応と判断
+			result.FilteringType = FilteringUnknown
+			result.ServerSupport.SupportsChangeRequest = false
+			return result, nil
+		}
 	}
 
 	// Test III: CHANGE-REQUEST属性でPortのみの変更を要求

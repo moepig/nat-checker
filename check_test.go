@@ -239,7 +239,7 @@ func TestCheckFilteringBehaviorIntegration(t *testing.T) {
 	// サポートしていないため、FilteringUnknownになることが多い
 	if result.FilteringType == FilteringUnknown {
 		t.Logf("Note: Filtering is Unknown (expected for most public STUN servers)")
-		t.Logf("      This is NOT an error. See FILTERING_UNKNOWN_ANALYSIS.md")
+		t.Logf("      Most public STUN servers do not support OTHER-ADDRESS or CHANGE-REQUEST attributes")
 	}
 }
 

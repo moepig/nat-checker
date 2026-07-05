@@ -65,6 +65,58 @@ func TestSTUNMessageDecoding(t *testing.T) {
 	assert.Equal(t, BindingResponse, msg.MessageType, "Wrong message type")
 }
 
+func TestSTUNMessageDecodingRejectsInvalidMagicCookie(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	// Magic Cookie が不正な（STUN ではない）パケット
+	data := make([]byte, 20)
+	data[0] = 0x01
+	data[1] = 0x01
+	data[4] = 0xDE // 不正な Magic Cookie
+	data[5] = 0xAD
+	data[6] = 0xBE
+	data[7] = 0xEF
+
+	_, err = client.decodeMessage(data)
+	assert.Error(t, err, "decodeMessage() should reject invalid magic cookie")
+}
+
+func TestSTUNMessageDecodingRejectsInvalidMessageLength(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	// Message Length がパケットサイズを超えている
+	data := make([]byte, 20)
+	data[0] = 0x01
+	data[1] = 0x01
+	data[2] = 0x00
+	data[3] = 0x08 // Length = 8 だが実データは 0 バイト
+	copy(data[4:8], STUNMagicCookieBytes)
+
+	_, err = client.decodeMessage(data)
+	assert.Error(t, err, "decodeMessage() should reject message length exceeding packet size")
+}
+
+func TestSTUNMessageDecodingIgnoresTrailingData(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	// Message Length = 0 だがパケット末尾に余分なデータがある
+	data := make([]byte, 24)
+	data[0] = 0x01
+	data[1] = 0x01
+	copy(data[4:8], STUNMagicCookieBytes)
+	data[20] = 0xFF // 余分なデータ
+
+	msg, err := client.decodeMessage(data)
+	require.NoError(t, err, "decodeMessage() should not fail")
+	assert.Empty(t, msg.Attributes, "trailing data should not be parsed as attributes")
+}
+
 func TestExtractErrorCode(t *testing.T) {
 	tests := []struct {
 		name         string

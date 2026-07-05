@@ -302,27 +302,37 @@ func (c *STUNClient) decodeMessage(data []byte) (*STUNMessage, error) {
 		MessageType: STUNMessageType(binary.BigEndian.Uint16(data[0:2])),
 	}
 
-	// MessageLengthを読み取るが、構造体には保存しない（検証のみに使用）
+	// RFC 8489 Section 5: "The magic cookie field MUST contain the fixed value 0x2112A442"
+	// Magic Cookie が一致しないパケットは STUN メッセージではないため弾く
+	if binary.BigEndian.Uint32(data[4:8]) != STUNMagicCookie {
+		return nil, fmt.Errorf("invalid magic cookie: 0x%08x", binary.BigEndian.Uint32(data[4:8]))
+	}
+
 	// RFC 8489 Section 5: "The message length MUST contain the size, in bytes, of the message not including the 20-byte STUN header."
-	messageLength := binary.BigEndian.Uint16(data[2:4])
-	_ = messageLength // 現在は未使用だが、将来的な検証に使用可能
+	messageLength := int(binary.BigEndian.Uint16(data[2:4]))
+	if 20+messageLength > len(data) {
+		return nil, fmt.Errorf("message length %d exceeds packet size %d", messageLength, len(data))
+	}
+	// 属性のパースは Message Length が示す範囲を上限とする
+	// （UDP パケット末尾に余分なデータがあっても無視する）
+	end := 20 + messageLength
 
 	copy(msg.TransactionID[:], data[8:20])
 
 	// アトリビュート解析
 	// RFC 8489 Section 14: "After the STUN header are zero or more attributes."
 	offset := 20
-	for offset < len(data) {
-		if offset+4 > len(data) {
-			break
+	for offset < end {
+		if offset+4 > end {
+			return nil, fmt.Errorf("truncated attribute header at offset %d", offset)
 		}
 
 		// RFC 8489 Section 14: "Each attribute is TLV (Type-Length-Value) encoded"
 		attrType := STUNAttributeType(binary.BigEndian.Uint16(data[offset : offset+2]))
 		attrLength := binary.BigEndian.Uint16(data[offset+2 : offset+4])
 
-		if offset+4+int(attrLength) > len(data) {
-			break
+		if offset+4+int(attrLength) > end {
+			return nil, fmt.Errorf("truncated attribute value at offset %d", offset)
 		}
 
 		attr := STUNAttribute{

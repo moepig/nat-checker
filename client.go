@@ -213,15 +213,7 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	if changeIP || changePort {
 		timeout = 5 * time.Second
 	}
-	c.conn.SetReadDeadline(time.Now().Add(timeout))
-	buffer := make([]byte, 1024)
-	n, _, err := c.conn.ReadFromUDP(buffer)
-	if err != nil {
-		return nil, err
-	}
-
-	// レスポンス解析
-	response, err := c.decodeMessage(buffer[:n])
+	response, _, err := c.readResponse(time.Now().Add(timeout), txID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +237,41 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	}
 
 	return nil, fmt.Errorf("mapped address not found in response")
+}
+
+// readResponse は deadline まで受信を試み、Transaction ID が一致する STUN
+// レスポンスとその送信元アドレスを返します。
+//
+// RFC 8489 Section 6.3.1: "the transaction ID that matches an existing STUN
+// transaction" — 送信した txID と一致しない応答は別トランザクションの
+// 遅延応答や無関係な UDP パケットなので、読み捨てて再受信します。
+// これにより、タイムアウトした Test II の遅延応答がソケットバッファに残って
+// Test III の応答として誤読されることを防ぎます。
+func (c *STUNClient) readResponse(deadline time.Time, txID [12]byte) (*STUNMessage, *net.UDPAddr, error) {
+	buffer := make([]byte, 1500)
+	for {
+		if err := c.conn.SetReadDeadline(deadline); err != nil {
+			return nil, nil, err
+		}
+
+		n, from, err := c.conn.ReadFromUDP(buffer)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		msg, err := c.decodeMessage(buffer[:n])
+		if err != nil {
+			// STUN メッセージとして解釈できないパケットは無視して再受信
+			continue
+		}
+
+		if msg.TransactionID != txID {
+			// 別トランザクションの応答は無視して再受信
+			continue
+		}
+
+		return msg, from, nil
+	}
 }
 
 // RFC 8489 Section 5: "All STUN messages comprise a 20-byte header followed by zero or more attributes"
@@ -533,15 +560,7 @@ func (c *STUNClient) GetAlternateAddress(serverAddr string) (*net.UDPAddr, error
 	}
 
 	// レスポンス受信
-	c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	buffer := make([]byte, 1024)
-	n, _, err := c.conn.ReadFromUDP(buffer)
-	if err != nil {
-		return nil, err
-	}
-
-	// レスポンス解析
-	response, err := c.decodeMessage(buffer[:n])
+	response, _, err := c.readResponse(time.Now().Add(3*time.Second), txID)
 	if err != nil {
 		return nil, err
 	}

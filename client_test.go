@@ -1,7 +1,9 @@
 package natchecker
 
 import (
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,6 +117,46 @@ func TestSTUNMessageDecodingIgnoresTrailingData(t *testing.T) {
 	msg, err := client.decodeMessage(data)
 	require.NoError(t, err, "decodeMessage() should not fail")
 	assert.Empty(t, msg.Attributes, "trailing data should not be parsed as attributes")
+}
+
+func TestReadResponseDiscardsUnmatchedPackets(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	sender, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	defer sender.Close()
+
+	clientPort := client.conn.LocalAddr().(*net.UDPAddr).Port
+	clientAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: clientPort}
+
+	wantTxID := [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	wrongTxID := [12]byte{99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}
+
+	makeResponse := func(txID [12]byte) []byte {
+		data := make([]byte, 20)
+		data[0] = 0x01 // Binding Response
+		data[1] = 0x01
+		copy(data[4:8], STUNMagicCookieBytes)
+		copy(data[8:20], txID[:])
+		return data
+	}
+
+	// 1. STUN ではないパケット → 読み捨てられる
+	_, err = sender.WriteToUDP([]byte("not a stun packet"), clientAddr)
+	require.NoError(t, err)
+	// 2. Transaction ID が一致しない応答 → 読み捨てられる
+	_, err = sender.WriteToUDP(makeResponse(wrongTxID), clientAddr)
+	require.NoError(t, err)
+	// 3. Transaction ID が一致する応答 → これが返る
+	_, err = sender.WriteToUDP(makeResponse(wantTxID), clientAddr)
+	require.NoError(t, err)
+
+	msg, from, err := client.readResponse(time.Now().Add(2*time.Second), wantTxID)
+	require.NoError(t, err, "readResponse() should return the matching response")
+	assert.Equal(t, wantTxID, msg.TransactionID)
+	assert.Equal(t, sender.LocalAddr().(*net.UDPAddr).Port, from.Port)
 }
 
 func TestExtractErrorCode(t *testing.T) {

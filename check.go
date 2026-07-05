@@ -12,6 +12,19 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
+// defaultSTUNPort は STUN の標準ポート (RFC 8489 Section 8)
+const defaultSTUNPort = "3478"
+
+// withDefaultPort は "host" または "host:port" 形式のアドレスを受け取り、
+// ポートが指定されていなければ STUN 標準ポート 3478 を補います。
+// IPv6 リテラルは "[::1]:3478" のように角括弧付きで解釈されます。
+func withDefaultPort(server string) string {
+	if _, _, err := net.SplitHostPort(server); err == nil {
+		return server
+	}
+	return net.JoinHostPort(server, defaultSTUNPort)
+}
+
 // NATマッピングタイプ
 type NATMappingType int
 
@@ -155,47 +168,33 @@ type CheckMappingResponseData struct {
 }
 
 // CheckMappingType は2つのSTUNサーバーを使ってNATマッピングタイプを判定します
-func CheckMappingType(serverIpA, serverIpB string) (*CheckMappingResult, error) {
+//
+// serverA, serverB は "host" または "host:port" 形式で指定します。
+// ポートを省略した場合は STUN 標準ポート 3478 が使われます。
+func CheckMappingType(serverA, serverB string) (*CheckMappingResult, error) {
 	client, err := NewSTUNClient()
 	if err != nil {
 		return nil, fmt.Errorf("STUNクライアント作成エラー: %w", err)
 	}
 	defer client.Close()
 
-	// 複数のポートを試す
-	ports := []string{":3478", ":19302"}
-
-	var mappingA1, mappingB1, mappingA2 *net.UDPAddr
+	serverAddrA := withDefaultPort(serverA)
+	serverAddrB := withDefaultPort(serverB)
 
 	// テスト1: サーバーAから基本的なマッピングを取得
-	for _, port := range ports {
-		mappingA1, err = client.SendBindingRequest(serverIpA+port, false, false)
-		if err == nil {
-			break
-		}
-	}
+	mappingA1, err := client.SendBindingRequest(serverAddrA, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("サーバーAへのリクエスト失敗: %w", err)
 	}
 
 	// テスト2: サーバーBから基本的なマッピングを取得
-	for _, port := range ports {
-		mappingB1, err = client.SendBindingRequest(serverIpB+port, false, false)
-		if err == nil {
-			break
-		}
-	}
+	mappingB1, err := client.SendBindingRequest(serverAddrB, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("サーバーBへのリクエスト失敗: %w", err)
 	}
 
 	// テスト3: 同じサーバーAに再度リクエスト（一貫性確認）
-	for _, port := range ports {
-		mappingA2, err = client.SendBindingRequest(serverIpA+port, false, false)
-		if err == nil {
-			break
-		}
-	}
+	mappingA2, err := client.SendBindingRequest(serverAddrA, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("サーバーAへの2回目リクエスト失敗: %w", err)
 	}
@@ -242,23 +241,14 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	}
 	defer client.Close()
 
-	// 複数のポートを試す
-	ports := []string{":3478", ":19302"}
-
-	var otherAddr *net.UDPAddr
-	var serverWithPort string
+	serverWithPort := withDefaultPort(serverAddr)
 
 	// Test I: 基本的なBinding Requestを送信し、OTHER-ADDRESSを取得
 	// RFC 5780: "The client performs a UDP connectivity check by sending
 	//            a STUN Binding Request to the server."
 	// レスポンスに含まれるOTHER-ADDRESSは、サーバーの代替IP:Portを示す
-	for _, port := range ports {
-		serverWithPort = serverAddr + port
-		otherAddr, err = client.GetAlternateAddress(serverWithPort)
-		if err == nil {
-			break
-		}
-	}
+	// 取得に失敗した場合は otherAddr が nil となり、FilteringUnknown として扱う
+	otherAddr, _ := client.GetAlternateAddress(serverWithPort)
 
 	result := &CheckFilteringResult{
 		ServerSupport: STUNServerSupportInfo{

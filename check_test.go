@@ -129,6 +129,26 @@ func TestDetermineNATType(t *testing.T) {
 	}
 }
 
+func TestWithDefaultPort(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"stun.cloudflare.com", "stun.cloudflare.com:3478"},
+		{"stun.cloudflare.com:19302", "stun.cloudflare.com:19302"},
+		{"192.0.2.1", "192.0.2.1:3478"},
+		{"192.0.2.1:3479", "192.0.2.1:3479"},
+		{"2001:db8::1", "[2001:db8::1]:3478"},
+		{"[2001:db8::1]:19302", "[2001:db8::1]:19302"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			assert.Equal(t, test.expected, withDefaultPort(test.input))
+		})
+	}
+}
+
 func TestCheckMappingResponse(t *testing.T) {
 	// CheckMappingResultの構造体テスト
 	result := &CheckMappingResult{

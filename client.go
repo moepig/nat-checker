@@ -200,20 +200,9 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	// メッセージをバイト列に変換
 	data := c.encodeMessage(msg)
 
-	// 送信
-	_, err = c.conn.WriteToUDP(data, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// レスポンス受信
+	// 送信・レスポンス受信（応答がなければ再送）
 	// RFC 8489 Section 6.3.1.1: "When forming the success response, the server adds an XOR-MAPPED-ADDRESS attribute"
-	// CHANGE-REQUESTの場合は異なるサーバーからの応答を待つため、タイムアウトを延長
-	timeout := 3 * time.Second
-	if changeIP || changePort {
-		timeout = 5 * time.Second
-	}
-	response, _, err := c.readResponse(time.Now().Add(timeout), txID)
+	response, _, err := c.roundTrip(addr, data, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -237,6 +226,48 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	}
 
 	return nil, fmt.Errorf("mapped address not found in response")
+}
+
+// RFC 8489 Section 6.2.1 の再送パラメータ
+// RTO 500ms から指数バックオフで再送する。RFC のデフォルト (Rc=7) では
+// タイムアウト確定までに約 40 秒かかるため、NAT 判定用途では送信回数を
+// 4 回に抑えている（タイムアウト確定まで約 7.5 秒）。
+const (
+	stunInitialRTO    = 500 * time.Millisecond
+	stunTransmitCount = 4
+)
+
+// roundTrip は STUN リクエストを送信し、Transaction ID の一致するレスポンスと
+// その送信元アドレスを返します。応答がなければ RTO を倍にしながら再送します。
+//
+// RFC 8489 Section 6.2.1: "RTO SHOULD be greater than 500 ms" /
+// "the client retransmits the request, doubling the RTO"
+// UDP パケットが 1 つ落ちただけでタイムアウト（＝フィルタリング判定では
+// 「フィルタされた」と解釈される）になるのを防ぐため、再送してから結論を出す。
+func (c *STUNClient) roundTrip(server *net.UDPAddr, request []byte, txID [12]byte) (*STUNMessage, *net.UDPAddr, error) {
+	rto := stunInitialRTO
+	var lastErr error
+
+	for attempt := 0; attempt < stunTransmitCount; attempt++ {
+		if _, err := c.conn.WriteToUDP(request, server); err != nil {
+			return nil, nil, err
+		}
+
+		msg, from, err := c.readResponse(time.Now().Add(rto), txID)
+		if err == nil {
+			return msg, from, nil
+		}
+
+		// タイムアウト以外のエラーは再送しても回復しないため即座に返す
+		if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+			return nil, nil, err
+		}
+
+		lastErr = err
+		rto *= 2
+	}
+
+	return nil, nil, lastErr
 }
 
 // readResponse は deadline まで受信を試み、Transaction ID が一致する STUN
@@ -553,14 +584,8 @@ func (c *STUNClient) GetAlternateAddress(serverAddr string) (*net.UDPAddr, error
 	// メッセージをバイト列に変換
 	data := c.encodeMessage(msg)
 
-	// 送信
-	_, err = c.conn.WriteToUDP(data, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// レスポンス受信
-	response, _, err := c.readResponse(time.Now().Add(3*time.Second), txID)
+	// 送信・レスポンス受信（応答がなければ再送）
+	response, _, err := c.roundTrip(addr, data, txID)
 	if err != nil {
 		return nil, err
 	}

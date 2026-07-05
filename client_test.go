@@ -159,6 +159,49 @@ func TestReadResponseDiscardsUnmatchedPackets(t *testing.T) {
 	assert.Equal(t, sender.LocalAddr().(*net.UDPAddr).Port, from.Port)
 }
 
+func TestRoundTripRetransmits(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	// 1回目のリクエストを無視し、2回目に応答するフェイクサーバー
+	server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	defer server.Close()
+
+	go func() {
+		buffer := make([]byte, 1500)
+		for i := 0; ; i++ {
+			n, from, err := server.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			if i == 0 {
+				continue // 1回目はパケットロスを模擬して無視
+			}
+			response := make([]byte, 20)
+			response[0] = 0x01 // Binding Response
+			response[1] = 0x01
+			copy(response[4:8], STUNMagicCookieBytes)
+			copy(response[8:20], buffer[8:20]) // txID をエコー
+			server.WriteToUDP(response, from)
+			_ = n
+			return
+		}
+	}()
+
+	txID := [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	request := client.encodeMessage(STUNMessage{
+		MessageType:   BindingRequest,
+		TransactionID: txID,
+	})
+
+	msg, _, err := client.roundTrip(server.LocalAddr().(*net.UDPAddr), request, txID)
+	require.NoError(t, err, "roundTrip() should succeed after retransmission")
+	assert.Equal(t, BindingResponse, msg.MessageType)
+	assert.Equal(t, txID, msg.TransactionID)
+}
+
 func TestExtractErrorCode(t *testing.T) {
 	tests := []struct {
 		name         string

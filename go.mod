@@ -1,4 +1,4 @@
-module githib.com/moepig/nat-checker
+module github.com/moepig/nat-checker
 
 go 1.25.4
 

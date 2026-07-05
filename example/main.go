@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"log"
 
-	checker "githib.com/moepig/nat-checker"
+	checker "github.com/moepig/nat-checker"
 )
 
 func main() {

@@ -5,7 +5,7 @@ RFC 5780 準拠の NAT Mapping/Filtering 判定ライブラリ
 ## インストール
 
 ```bash
-go get githib.com/moepig/nat-checker
+go get github.com/moepig/nat-checker
 ```
 
 ## 使い方
@@ -19,7 +19,7 @@ import (
     "fmt"
     "log"
 
-    checker "githib.com/moepig/nat-checker"
+    checker "github.com/moepig/nat-checker"
 )
 
 func main() {

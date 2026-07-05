@@ -68,10 +68,10 @@ func (d DetailedNATType) String() string {
 // RFC 4787とRFC 5780では、より詳細な2軸分類（Mapping × Filtering）を採用していますが、
 // 後方互換性のために従来の4種類の分類名を提供します：
 //
-//   Full Cone NAT           : EI Mapping + EI Filtering
-//   Restricted Cone NAT     : EI Mapping + AD Filtering
-//   Port Restricted Cone NAT: EI Mapping + APD Filtering
-//   Symmetric NAT           : AD Mapping または APD Mapping（フィルタリングに依らず）
+//	Full Cone NAT           : EI Mapping + EI Filtering
+//	Restricted Cone NAT     : EI Mapping + AD Filtering
+//	Port Restricted Cone NAT: EI Mapping + APD Filtering
+//	Symmetric NAT           : AD Mapping または APD Mapping（フィルタリングに依らず）
 //
 // (EI=Endpoint Independent, AD=Address Dependent, APD=Address and Port Dependent)
 func (d DetailedNATType) LegacyName() string {
@@ -110,9 +110,9 @@ type STUNServerSupportInfo struct {
 
 // CheckFilteringResponseData はフィルタリング判定の詳細データ
 type CheckFilteringResponseData struct {
-	OtherAddress      *net.UDPAddr // Test I で取得した代替アドレス
-	TestIIResponse    bool         // Test II (Change IP+Port) でレスポンスを受信したか
-	TestIIIResponse   bool         // Test III (Change Port) でレスポンスを受信したか
+	OtherAddress    *net.UDPAddr // Test I で取得した代替アドレス
+	TestIIResponse  bool         // Test II (Change IP+Port) でレスポンスを受信したか
+	TestIIIResponse bool         // Test III (Change Port) でレスポンスを受信したか
 }
 
 // CheckFilteringResult はフィルタリング判定の結果
@@ -326,13 +326,14 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 // FullNATDetection はRFC 5780準拠の包括的なNAT判定を実行します
 //
 // RFC 5780: "This specification defines an experimental usage of the
-//            Session Traversal Utilities for NAT (STUN) Protocol that
-//            discovers the presence and current behavior of NATs and firewalls
-//            between the STUN client and the STUN server."
+//
+//	Session Traversal Utilities for NAT (STUN) Protocol that
+//	discovers the presence and current behavior of NATs and firewalls
+//	between the STUN client and the STUN server."
 //
 // NATを2つの独立した動作で分類します（RFC 4787）：
-//   1. Mapping Behavior: NATがどのように外部アドレス:ポートを割り当てるか
-//   2. Filtering Behavior: NATがどのように外部からのパケットをフィルタリングするか
+//  1. Mapping Behavior: NATがどのように外部アドレス:ポートを割り当てるか
+//  2. Filtering Behavior: NATがどのように外部からのパケットをフィルタリングするか
 //
 // この組み合わせにより、以下の9種類のNATタイプに分類されます：
 //   - 3種類のマッピング × 3種類のフィルタリング = 9通り

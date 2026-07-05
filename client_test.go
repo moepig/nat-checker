@@ -26,7 +26,7 @@ func TestSTUNMessageEncoding(t *testing.T) {
 	}
 
 	data := client.encodeMessage(msg)
-	
+
 	// 最小ヘッダーサイズをチェック
 	assert.GreaterOrEqual(t, len(data), 20, "Encoded message should be at least 20 bytes")
 

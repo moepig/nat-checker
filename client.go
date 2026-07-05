@@ -75,6 +75,7 @@ const (
 // STUN Magic Cookie
 // RFC 8489 Section 5: "The magic cookie field MUST contain the fixed value 0x2112A442 in network byte order."
 const STUNMagicCookie uint32 = 0x2112A442
+
 // バイト列で使いたい時もあるので、あらかじめ用意しておく
 var STUNMagicCookieBytes = []byte{0x21, 0x12, 0xA4, 0x42}
 
@@ -104,8 +105,10 @@ type STUNMessage struct {
 //
 // 属性フォーマット:
 // ```text
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
+//	0                   1                   2                   3
+//	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 // |         Type                  |            Length             |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -128,12 +131,12 @@ func NewSTUNClient() (*STUNClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &STUNClient{conn: conn}, nil
 }
 
@@ -155,12 +158,12 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	// RFC 8489 Section 5: "The transaction ID MUST be uniformly and randomly chosen from the interval 0 .. 2**96-1, and MUST be cryptographically random."
 	var txID [12]byte
 	rand.Read(txID[:])
-	
+
 	msg := STUNMessage{
 		MessageType:   BindingRequest,
 		TransactionID: txID,
 	}
-	
+
 	// Change Requestアトリビュート追加
 	// RFC 3489 Section 11.2.4: CHANGE-REQUEST Attribute
 	// 注意: この属性はRFC 3489で定義され、RFC 8489では削除されています。
@@ -193,16 +196,16 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 			Value:  valueBytes,
 		})
 	}
-	
+
 	// メッセージをバイト列に変換
 	data := c.encodeMessage(msg)
-	
+
 	// 送信
 	_, err = c.conn.WriteToUDP(data, addr)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// レスポンス受信
 	// RFC 8489 Section 6.3.1.1: "When forming the success response, the server adds an XOR-MAPPED-ADDRESS attribute"
 	// CHANGE-REQUESTの場合は異なるサーバーからの応答を待つため、タイムアウトを延長
@@ -228,7 +231,7 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 		code, reason := extractErrorCode(response)
 		return nil, fmt.Errorf("STUN error response: code=%d, reason=%s", code, reason)
 	}
-	
+
 	// RFC 8489 Section 14.2: "The XOR-MAPPED-ADDRESS attribute is identical to the MAPPED-ADDRESS attribute, except that the reflexive transport address is obfuscated."
 	// RFC 8489 Section 14.1: "The MAPPED-ADDRESS attribute indicates a reflexive transport address of the client."
 	// XOR-MAPPED-ADDRESSまたはMAPPED-ADDRESSを探す
@@ -240,7 +243,7 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 			return c.parseAddress(attr.Value, false, response.TransactionID)
 		}
 	}
-	
+
 	return nil, fmt.Errorf("mapped address not found in response")
 }
 
@@ -256,7 +259,7 @@ func (c *STUNClient) encodeMessage(msg STUNMessage) []byte {
 			attrLen += 4 - int(attr.Length%4)
 		}
 	}
-	
+
 	data := make([]byte, 20+attrLen) // ヘッダー20バイト + アトリビュート
 
 	// ヘッダー
@@ -268,7 +271,7 @@ func (c *STUNClient) encodeMessage(msg STUNMessage) []byte {
 	binary.BigEndian.PutUint32(data[4:8], STUNMagicCookie)
 	// RFC 8489 Section 5: "The transaction ID is a 96-bit (12-byte) identifier"
 	copy(data[8:20], msg.TransactionID[:])
-	
+
 	// アトリビュート
 	// RFC 8489 Section 14: "After the STUN header are zero or more attributes."
 	offset := 20
@@ -284,7 +287,7 @@ func (c *STUNClient) encodeMessage(msg STUNMessage) []byte {
 			offset += 4 - int(attr.Length%4)
 		}
 	}
-	
+
 	return data
 }
 
@@ -305,7 +308,7 @@ func (c *STUNClient) decodeMessage(data []byte) (*STUNMessage, error) {
 	_ = messageLength // 現在は未使用だが、将来的な検証に使用可能
 
 	copy(msg.TransactionID[:], data[8:20])
-	
+
 	// アトリビュート解析
 	// RFC 8489 Section 14: "After the STUN header are zero or more attributes."
 	offset := 20
@@ -315,20 +318,20 @@ func (c *STUNClient) decodeMessage(data []byte) (*STUNMessage, error) {
 		}
 
 		// RFC 8489 Section 14: "Each attribute is TLV (Type-Length-Value) encoded"
-		attrType := STUNAttributeType(binary.BigEndian.Uint16(data[offset:offset+2]))
-		attrLength := binary.BigEndian.Uint16(data[offset+2:offset+4])
-		
+		attrType := STUNAttributeType(binary.BigEndian.Uint16(data[offset : offset+2]))
+		attrLength := binary.BigEndian.Uint16(data[offset+2 : offset+4])
+
 		if offset+4+int(attrLength) > len(data) {
 			break
 		}
-		
+
 		attr := STUNAttribute{
 			Type:   attrType,
 			Length: attrLength,
 			Value:  make([]byte, attrLength),
 		}
 		copy(attr.Value, data[offset+4:offset+4+int(attrLength)])
-		
+
 		msg.Attributes = append(msg.Attributes, attr)
 
 		offset += 4 + int(attrLength)
@@ -338,7 +341,7 @@ func (c *STUNClient) decodeMessage(data []byte) (*STUNMessage, error) {
 			offset += 4 - int(attrLength%4)
 		}
 	}
-	
+
 	return msg, nil
 }
 
@@ -375,9 +378,9 @@ func (c *STUNClient) parseAddress(data []byte, isXor bool, txID [12]byte) (*net.
 	// STUNアドレス形式: 1バイト予約 + 1バイトファミリー + 2バイトポート + IPアドレス
 	family := data[1] // 2バイト目がファミリー
 	port := binary.BigEndian.Uint16(data[2:4])
-	
+
 	var ip net.IP
-	
+
 	switch family {
 	case 0x01: // IPv4
 		// RFC 8489 Section 14.1: "If the address family is IPv4, the address MUST be 32 bits (4 bytes)"
@@ -395,7 +398,7 @@ func (c *STUNClient) parseAddress(data []byte, isXor bool, txID [12]byte) (*net.
 				ip[i] ^= STUNMagicCookieBytes[i]
 			}
 		}
-		
+
 	case 0x02: // IPv6
 		// RFC 8489 Section 14.1: "If the address family is IPv6, the address MUST be 128 bits (16 bytes)"
 		if len(data) < 20 {
@@ -416,12 +419,12 @@ func (c *STUNClient) parseAddress(data []byte, isXor bool, txID [12]byte) (*net.
 				ip[i] ^= xorKey[i]
 			}
 		}
-		
+
 	default:
 		// 不明なファミリーの場合、デバッグ情報を含めてエラーを返す
 		return nil, fmt.Errorf("unsupported address family: %d (0x%02x), data: %x", family, family, data)
 	}
-	
+
 	return &net.UDPAddr{IP: ip, Port: int(port)}, nil
 }
 
@@ -432,8 +435,10 @@ func (c *STUNClient) parseAddress(data []byte, isXor bool, txID [12]byte) (*net.
 // "The error code is a numeric value in the range 300-699."
 //
 // Format:
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
+//	0                   1                   2                   3
+//	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 // |           Reserved, should be 0         |Class|     Number    |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -482,15 +487,17 @@ func isChangeRequestUnsupportedError(msg *STUNMessage) bool {
 // GetAlternateAddress はSTUNサーバーからOTHER-ADDRESS (代替アドレス) を取得します
 //
 // RFC 5780 Section 7.2: "The OTHER-ADDRESS attribute is used in Binding Responses.
-//                        It informs the client of the source IP address and port that
-//                        would be used if the client requested the 'change IP' and
-//                        'change port' behavior."
+//
+//	It informs the client of the source IP address and port that
+//	would be used if the client requested the 'change IP' and
+//	'change port' behavior."
 //
 // この代替アドレスは、CHANGE-REQUESTテスト（Test II, III）で使用され、
 // NATフィルタリング動作の判定に必要です。
 //
 // 注意: 多くのSTUNサーバーはOTHER-ADDRESSをサポートしていません。
-//       その場合、CHANGED-ADDRESS (RFC 3489) へのフォールバックを試みます。
+//
+//	その場合、CHANGED-ADDRESS (RFC 3489) へのフォールバックを試みます。
 func (c *STUNClient) GetAlternateAddress(serverAddr string) (*net.UDPAddr, error) {
 	addr, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {

@@ -121,6 +121,20 @@ type STUNAttribute struct {
 	Value  []byte
 }
 
+// STUNError はサーバーからの STUN エラーレスポンス (RFC 8489 Section 14.8) を表します。
+//
+// タイムアウトや ICMP unreachable などのネットワークエラーと区別するための
+// sentinel エラー型で、errors.As で判別できます。
+// 例: エラーコード 420 (Unknown Attribute) は CHANGE-REQUEST 非対応サーバーが返す。
+type STUNError struct {
+	Code   int
+	Reason string
+}
+
+func (e *STUNError) Error() string {
+	return fmt.Sprintf("STUN error response: code=%d, reason=%s", e.Code, e.Reason)
+}
+
 // STUNクライアント
 type STUNClient struct {
 	conn *net.UDPConn
@@ -210,7 +224,7 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 	// エラーレスポンスのチェック
 	if response.MessageType == BindingErrorResponse {
 		code, reason := extractErrorCode(response)
-		return nil, fmt.Errorf("STUN error response: code=%d, reason=%s", code, reason)
+		return nil, &STUNError{Code: code, Reason: reason}
 	}
 
 	// RFC 8489 Section 14.2: "The XOR-MAPPED-ADDRESS attribute is identical to the MAPPED-ADDRESS attribute, except that the reflexive transport address is obfuscated."
@@ -535,21 +549,6 @@ func extractErrorCode(msg *STUNMessage) (int, string) {
 		}
 	}
 	return 0, ""
-}
-
-// isChangeRequestUnsupportedError はエラーがCHANGE-REQUEST非対応を示すかチェック
-//
-// RFC 8489 Section 14.8: エラーコード420 "Unknown Attribute"
-// "The server did not understand a comprehension-required attribute in the request."
-//
-// CHANGE-REQUEST属性（RFC 3489）はRFC 8489で削除されたため、多くの最新の
-// STUNサーバーはこの属性を理解せず、エラーコード420を返します。
-// この場合、フィルタリング判定は不可能と判断します。
-func isChangeRequestUnsupportedError(msg *STUNMessage) bool {
-	code, _ := extractErrorCode(msg)
-	// エラーコード 420: Unknown Attribute
-	// CHANGE-REQUEST属性が未サポートの場合に返される
-	return code == 420
 }
 
 // GetAlternateAddress はSTUNサーバーからOTHER-ADDRESS (代替アドレス) を取得します

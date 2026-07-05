@@ -1,6 +1,8 @@
 package natchecker
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -250,45 +252,12 @@ func TestExtractErrorCode(t *testing.T) {
 	}
 }
 
-func TestIsChangeRequestUnsupportedError(t *testing.T) {
-	tests := []struct {
-		name       string
-		errorCode  int
-		shouldFail bool
-	}{
-		{
-			name:       "Error 420 - CHANGE-REQUEST unsupported",
-			errorCode:  420,
-			shouldFail: true,
-		},
-		{
-			name:       "Error 400 - Other error",
-			errorCode:  400,
-			shouldFail: false,
-		},
-	}
+func TestSTUNErrorIsDetectableWithErrorsAs(t *testing.T) {
+	var err error = fmt.Errorf("wrapped: %w", &STUNError{Code: 420, Reason: "Unknown Attribute"})
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			// エラーコードを構築
-			class := test.errorCode / 100
-			number := test.errorCode % 100
-			attrValue := []byte{0x00, 0x00, byte(class), byte(number)}
-
-			msg := &STUNMessage{
-				MessageType:   BindingErrorResponse,
-				TransactionID: [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
-				Attributes: []STUNAttribute{
-					{
-						Type:   ErrorCode,
-						Length: 4,
-						Value:  attrValue,
-					},
-				},
-			}
-
-			result := isChangeRequestUnsupportedError(msg)
-			assert.Equal(t, test.shouldFail, result)
-		})
-	}
+	var stunErr *STUNError
+	require.True(t, errors.As(err, &stunErr), "errors.As should unwrap STUNError")
+	assert.Equal(t, 420, stunErr.Code)
+	assert.Equal(t, "Unknown Attribute", stunErr.Reason)
+	assert.Contains(t, stunErr.Error(), "code=420")
 }

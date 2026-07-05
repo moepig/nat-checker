@@ -1,9 +1,16 @@
 package natchecker
 
 import (
+	"errors"
 	"fmt"
 	"net"
 )
+
+// isTimeoutError はエラーが受信タイムアウトかどうかを判定します
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
 
 // NATマッピングタイプ
 type NATMappingType int
@@ -284,18 +291,22 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 		return result, nil
 	}
 
-	// Test II でエラーレスポンス（エラーコード420等）を受信した場合
-	// CHANGE-REQUEST非対応サーバーと判断し、フィルタリング判定は不可能
-	// ただし、タイムアウトエラーの場合は Test III に進む必要がある
+	// Test II のエラー分類:
+	//   - STUN エラーレスポンス（420 Unknown Attribute 等）
+	//     → CHANGE-REQUEST 非対応サーバーと判断し、フィルタリング判定は不可能
+	//   - タイムアウト → Test III に進む（正常な動作）
+	//   - それ以外（ICMP unreachable、デコード失敗等）→ 判定不能としてエラーを返す
 	if testIIErr != nil {
-		// タイムアウトエラーかどうかをチェック
-		if netErr, ok := testIIErr.(net.Error); ok && netErr.Timeout() {
-			// タイムアウトの場合は Test III に進む（正常な動作）
-		} else {
-			// STUN エラーレスポンス（420等）の場合はサーバー非対応と判断
+		var stunErr *STUNError
+		switch {
+		case errors.As(testIIErr, &stunErr):
 			result.FilteringType = FilteringUnknown
 			result.ServerSupport.SupportsChangeRequest = false
 			return result, nil
+		case isTimeoutError(testIIErr):
+			// Test III に進む
+		default:
+			return nil, fmt.Errorf("フィルタリング Test II 失敗: %w", testIIErr)
 		}
 	}
 
@@ -313,6 +324,21 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 		result.FilteringType = AddressDependentFiltering
 		result.ServerSupport.SupportsChangeRequest = true
 		return result, nil
+	}
+
+	// Test III のエラー分類（Test II と同様）
+	if testIIIErr != nil {
+		var stunErr *STUNError
+		switch {
+		case errors.As(testIIIErr, &stunErr):
+			result.FilteringType = FilteringUnknown
+			result.ServerSupport.SupportsChangeRequest = false
+			return result, nil
+		case isTimeoutError(testIIIErr):
+			// フィルタリングされたと解釈して判定を続ける
+		default:
+			return nil, fmt.Errorf("フィルタリング Test III 失敗: %w", testIIIErr)
+		}
 	}
 
 	// Test II と Test III の両方でタイムアウト: Address and Port Dependent Filtering

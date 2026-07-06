@@ -415,8 +415,12 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	// Test II と Test III の両方でタイムアウト: Address and Port Dependent Filtering
 	// RFC 5780: "If no response is received, the filtering behavior is
 	//            Address and Port-Dependent."
+	//
+	// なお、タイムアウトは「サーバーが CHANGE-REQUEST を黙って無視した」場合と
+	// 「NAT がフィルタした」場合を区別できないため、CHANGE-REQUEST サポートの
+	// 根拠にはならない。SupportsChangeRequest は、代替アドレスからの応答を
+	// 実際に確認できた場合にのみ true とする
 	result.FilteringType = AddressPortDependentFiltering
-	result.ServerSupport.SupportsChangeRequest = true
 	return result, nil
 }
 

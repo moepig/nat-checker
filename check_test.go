@@ -92,41 +92,66 @@ func TestDetailedNATType(t *testing.T) {
 
 func TestDetermineNATType(t *testing.T) {
 	tests := []struct {
-		name      string
-		mappingA1 *net.UDPAddr
-		mappingB1 *net.UDPAddr
-		mappingA2 *net.UDPAddr
-		expected  NATMappingType
+		name     string
+		mapping1 *net.UDPAddr // Test I: 主アドレス宛
+		mapping2 *net.UDPAddr // Test II: 代替IP・主ポート宛
+		mapping3 *net.UDPAddr // Test III: 代替IP・代替ポート宛
+		expected NATMappingType
 	}{
 		{
-			name:      "Endpoint Independent - same port for different servers",
-			mappingA1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			mappingB1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			mappingA2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			expected:  EndpointIndependent,
+			name:     "Endpoint Independent - same mapping for different destination IPs",
+			mapping1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping3: nil, // Test I と Test II が一致した場合 Test III は実行されない
+			expected: EndpointIndependent,
 		},
 		{
-			name:      "Address Dependent - different port for different servers",
-			mappingA1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			mappingB1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
-			mappingA2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			expected:  AddressDependent,
+			name:     "Address Dependent - mapping changes with IP but not with port",
+			mapping1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
+			mapping3: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
+			expected: AddressDependent,
 		},
 		{
-			name:      "Address Port Dependent - inconsistent port for same server",
-			mappingA1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			mappingB1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
-			mappingA2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 67890},
-			expected:  AddressPortDependent,
+			name:     "Address Port Dependent - mapping changes with every destination",
+			mapping1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321},
+			mapping3: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 67890},
+			expected: AddressPortDependent,
+		},
+		{
+			name: "same port but different external IP is not Endpoint Independent",
+			// 外部 IP プールを持つ CGN 等: ポートが同じでも IP が違えば別マッピング
+			mapping1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping2: &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 12345},
+			mapping3: &net.UDPAddr{IP: net.ParseIP("203.0.113.3"), Port: 12345},
+			expected: AddressPortDependent,
+		},
+		{
+			name:     "Address Dependent detected by IP+port comparison",
+			mapping1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			mapping2: &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 12345},
+			mapping3: &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 12345},
+			expected: AddressDependent,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := determineNATType(test.mappingA1, test.mappingB1, test.mappingA2)
+			result := determineNATType(test.mapping1, test.mapping2, test.mapping3)
 			assert.Equal(t, test.expected, result)
 		})
 	}
+}
+
+func TestUDPAddrEqual(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345}
+
+	assert.True(t, udpAddrEqual(addr, &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345}))
+	assert.False(t, udpAddrEqual(addr, &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 12345}), "IP が異なれば別マッピング")
+	assert.False(t, udpAddrEqual(addr, &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 54321}), "ポートが異なれば別マッピング")
+	assert.False(t, udpAddrEqual(addr, nil))
+	assert.False(t, udpAddrEqual(nil, addr))
 }
 
 func TestWithDefaultPort(t *testing.T) {
@@ -154,16 +179,17 @@ func TestCheckMappingResponse(t *testing.T) {
 	result := &CheckMappingResult{
 		NATType: EndpointIndependent,
 		Response: CheckMappingResponseData{
-			MappingA1: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
-			MappingB1: &net.UDPAddr{IP: net.ParseIP("203.0.113.2"), Port: 12345},
-			MappingA2: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			OtherAddress: &net.UDPAddr{IP: net.ParseIP("198.51.100.1"), Port: 3479},
+			Mapping1:     &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
+			Mapping2:     &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 12345},
 		},
 	}
 
 	assert.Equal(t, EndpointIndependent, result.NATType)
-	assert.Equal(t, "203.0.113.1:12345", result.Response.MappingA1.String())
-	assert.Equal(t, "203.0.113.2:12345", result.Response.MappingB1.String())
-	assert.Equal(t, "203.0.113.1:12345", result.Response.MappingA2.String())
+	assert.Equal(t, "198.51.100.1:3479", result.Response.OtherAddress.String())
+	assert.Equal(t, "203.0.113.1:12345", result.Response.Mapping1.String())
+	assert.Equal(t, "203.0.113.1:12345", result.Response.Mapping2.String())
+	assert.Nil(t, result.Response.Mapping3)
 }
 
 // 統合テスト - INTEGRATION=1 環境変数が設定されている場合のみ実行
@@ -172,43 +198,35 @@ func TestCheckMappingTypeIntegration(t *testing.T) {
 		t.Skip("Skipping integration test. Set INTEGRATION=1 to run.")
 	}
 
-	// 異なるIPアドレスのSTUNサーバーを使用してマッピング判定
-	// Address-Dependent Mappingを正しく検出するには異なるサーバーが必要
-	serverA := "stun.cloudflare.com"
-	serverB := "stun1.l.google.com"
+	// マッピング判定には OTHER-ADDRESS (RFC 5780) 対応サーバーが必要
+	server := "stunserver2025.stunprotocol.org"
 
-	var result *CheckMappingResult
-	var err error
-
-	result, err = CheckMappingType(serverA, serverB)
+	result, err := CheckMappingType(server)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// 有効なNATタイプが返されることを確認
-	validTypes := []NATMappingType{EndpointIndependent, AddressDependent, AddressPortDependent}
-	assert.Contains(t, validTypes, result.NATType)
+	// Test I のマッピング結果が設定されていることを確認
+	require.NotNil(t, result.Response.Mapping1)
+	assert.NotNil(t, result.Response.Mapping1.IP)
+	assert.Greater(t, result.Response.Mapping1.Port, 0)
 
-	// マッピング結果が設定されていることを確認
-	assert.NotNil(t, result.Response.MappingA1)
-	assert.NotNil(t, result.Response.MappingB1)
-	assert.NotNil(t, result.Response.MappingA2)
-
-	// IPアドレスとポートが有効であることを確認
-	assert.NotNil(t, result.Response.MappingA1.IP)
-	assert.Greater(t, result.Response.MappingA1.Port, 0)
-	assert.NotNil(t, result.Response.MappingB1.IP)
-	assert.Greater(t, result.Response.MappingB1.Port, 0)
-	assert.NotNil(t, result.Response.MappingA2.IP)
-	assert.Greater(t, result.Response.MappingA2.Port, 0)
+	// OTHER-ADDRESS 対応サーバーであれば具体的なタイプが判定される
+	if result.Response.OtherAddress != nil {
+		validTypes := []NATMappingType{EndpointIndependent, AddressDependent, AddressPortDependent}
+		assert.Contains(t, validTypes, result.NATType)
+		assert.NotNil(t, result.Response.Mapping2)
+	} else {
+		assert.Equal(t, Unknown, result.NATType)
+	}
 
 	t.Logf("=== Mapping Detection Test ===")
-	t.Logf("Server A: %s", serverA)
-	t.Logf("Server B: %s", serverB)
+	t.Logf("Server: %s", server)
 	t.Logf("Detected NAT mapping type: %s", result.NATType)
-	t.Logf("MappingA1: %s", result.Response.MappingA1)
-	t.Logf("MappingB1: %s", result.Response.MappingB1)
-	t.Logf("MappingA2: %s", result.Response.MappingA2)
+	t.Logf("OtherAddress: %s", result.Response.OtherAddress)
+	t.Logf("Mapping1: %s", result.Response.Mapping1)
+	t.Logf("Mapping2: %s", result.Response.Mapping2)
+	t.Logf("Mapping3: %s", result.Response.Mapping3)
 }
 
 // 統合テスト - フィルタリング判定
@@ -269,27 +287,24 @@ func TestFullNATDetectionIntegration(t *testing.T) {
 		t.Skip("Skipping integration test. Set INTEGRATION=1 to run.")
 	}
 
-	// Mapping判定: 異なるIPアドレスのサーバーを使用（正確な判定のため）
-	// Filtering判定: FullNATDetection内で serverA を使用（RFC 5780対応サーバー）
-	serverA := "stunserver2025.stunprotocol.org"
-	serverB := "stun.cloudflare.com"
+	// マッピング・フィルタリングとも RFC 5780
+	// (OTHER-ADDRESS/CHANGE-REQUEST) 対応サーバーが必要
+	server := "stunserver2025.stunprotocol.org"
 
-	result, err := FullNATDetection(serverA, serverB)
+	result, err := FullNATDetection(server)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	t.Logf("=== Full NAT Detection Result ===")
-	t.Logf("Mapping Server A: %s", serverA)
-	t.Logf("Mapping Server B: %s", serverB)
-	t.Logf("Filtering Server: %s", serverA)
+	t.Logf("Server: %s", server)
 	t.Logf("")
 	t.Logf("Detailed Type: %s", result.DetailedType)
 	t.Logf("Legacy Name: %s", result.DetailedType.LegacyName())
 	t.Logf("\n--- Mapping ---")
 	t.Logf("Mapping Type: %s", result.MappingResult.NATType)
-	t.Logf("MappingA1: %s", result.MappingResult.Response.MappingA1)
-	t.Logf("MappingB1: %s", result.MappingResult.Response.MappingB1)
-	t.Logf("MappingA2: %s", result.MappingResult.Response.MappingA2)
+	t.Logf("Mapping1: %s", result.MappingResult.Response.Mapping1)
+	t.Logf("Mapping2: %s", result.MappingResult.Response.Mapping2)
+	t.Logf("Mapping3: %s", result.MappingResult.Response.Mapping3)
 	t.Logf("\n--- Filtering ---")
 	t.Logf("Filtering Type: %s", result.FilteringResult.FilteringType)
 	t.Logf("Supports CHANGE-REQUEST: %v", result.FilteringResult.ServerSupport.SupportsChangeRequest)

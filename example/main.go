@@ -19,12 +19,11 @@ func main() {
 	fmt.Println("=== RFC 5780 NAT Type Detection ===")
 	fmt.Println()
 
-	// Mapping 判定には異なる IP アドレスの 2 サーバーが必要。
-	// Filtering 判定には RFC 5780 (OTHER-ADDRESS/CHANGE-REQUEST) 対応サーバーが必要。
-	serverA := "stunserver2025.stunprotocol.org"
-	serverB := "stun.cloudflare.com"
+	// Mapping/Filtering 判定には RFC 5780 (OTHER-ADDRESS/CHANGE-REQUEST)
+	// 対応の STUN サーバーが必要。
+	server := "stunserver2025.stunprotocol.org"
 
-	result, err := checker.FullNATDetection(serverA, serverB)
+	result, err := checker.FullNATDetection(server)
 	if err != nil {
 		log.Fatalf("NAT検出エラー: %v", err)
 	}

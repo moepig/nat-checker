@@ -160,8 +160,20 @@ func (c *STUNClient) Close() {
 	}
 }
 
+// BindingResult は Binding トランザクション 1 往復で得られる情報
+type BindingResult struct {
+	// MappedAddress はクライアントの外部アドレス
+	// (XOR-MAPPED-ADDRESS または MAPPED-ADDRESS)
+	MappedAddress *net.UDPAddr
+	// OtherAddress はサーバーの代替アドレス
+	// (OTHER-ADDRESS または CHANGED-ADDRESS)。レスポンスに含まれなければ nil
+	OtherAddress *net.UDPAddr
+	// ResponseFrom はレスポンスの送信元アドレス
+	ResponseFrom *net.UDPAddr
+}
+
 // RFC 8489 Section 2: "The Binding method can be used to determine the particular binding a NAT has allocated to a STUN client"
-func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort bool) (*net.UDPAddr, error) {
+func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort bool) (*BindingResult, error) {
 	addr, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
 		return nil, err
@@ -216,7 +228,7 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 
 	// 送信・レスポンス受信（応答がなければ再送）
 	// RFC 8489 Section 6.3.1.1: "When forming the success response, the server adds an XOR-MAPPED-ADDRESS attribute"
-	response, _, err := c.roundTrip(addr, data, txID)
+	response, from, err := c.roundTrip(addr, data, txID)
 	if err != nil {
 		return nil, err
 	}
@@ -227,19 +239,44 @@ func (c *STUNClient) SendBindingRequest(serverAddr string, changeIP, changePort 
 		return nil, &STUNError{Code: code, Reason: reason}
 	}
 
+	result := &BindingResult{ResponseFrom: from}
+
 	// RFC 8489 Section 14.2: "The XOR-MAPPED-ADDRESS attribute is identical to the MAPPED-ADDRESS attribute, except that the reflexive transport address is obfuscated."
 	// RFC 8489 Section 14.1: "The MAPPED-ADDRESS attribute indicates a reflexive transport address of the client."
-	// XOR-MAPPED-ADDRESSまたはMAPPED-ADDRESSを探す
+	// RFC 5780 Section 7.2: OTHER-ADDRESS も同じ Binding Response に含まれるため、
+	// 1 往復でまとめて取得する
+	var mappedAddress, xorMappedAddress *net.UDPAddr
 	for _, attr := range response.Attributes {
-		if attr.Type == XorMappedAddress {
-			return c.parseAddress(attr.Value, true, response.TransactionID)
-		}
-		if attr.Type == MappedAddress {
-			return c.parseAddress(attr.Value, false, response.TransactionID)
+		switch attr.Type {
+		case XorMappedAddress:
+			xorMappedAddress, err = c.parseAddress(attr.Value, true, response.TransactionID)
+			if err != nil {
+				return nil, err
+			}
+		case MappedAddress:
+			mappedAddress, err = c.parseAddress(attr.Value, false, response.TransactionID)
+			if err != nil {
+				return nil, err
+			}
+		case OtherAddress, ChangedAddress:
+			// 代替アドレスが解析できなくても Binding 自体は成立しているので
+			// エラーにはせず nil のままにする
+			if otherAddr, parseErr := c.parseAddress(attr.Value, false, response.TransactionID); parseErr == nil {
+				result.OtherAddress = otherAddr
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("mapped address not found in response")
+	// XOR-MAPPED-ADDRESS を優先する
+	result.MappedAddress = xorMappedAddress
+	if result.MappedAddress == nil {
+		result.MappedAddress = mappedAddress
+	}
+	if result.MappedAddress == nil {
+		return nil, fmt.Errorf("mapped address not found in response")
+	}
+
+	return result, nil
 }
 
 // RFC 8489 Section 6.2.1 の再送パラメータ
@@ -549,52 +586,4 @@ func extractErrorCode(msg *STUNMessage) (int, string) {
 		}
 	}
 	return 0, ""
-}
-
-// GetAlternateAddress はSTUNサーバーからOTHER-ADDRESS (代替アドレス) を取得します
-//
-// RFC 5780 Section 7.2: "The OTHER-ADDRESS attribute is used in Binding Responses.
-//
-//	It informs the client of the source IP address and port that
-//	would be used if the client requested the 'change IP' and
-//	'change port' behavior."
-//
-// この代替アドレスは、CHANGE-REQUESTテスト（Test II, III）で使用され、
-// NATフィルタリング動作の判定に必要です。
-//
-// 注意: 多くのSTUNサーバーはOTHER-ADDRESSをサポートしていません。
-//
-//	その場合、CHANGED-ADDRESS (RFC 3489) へのフォールバックを試みます。
-func (c *STUNClient) GetAlternateAddress(serverAddr string) (*net.UDPAddr, error) {
-	addr, err := net.ResolveUDPAddr("udp", serverAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	// トランザクションID生成
-	var txID [12]byte
-	rand.Read(txID[:])
-
-	msg := STUNMessage{
-		MessageType:   BindingRequest,
-		TransactionID: txID,
-	}
-
-	// メッセージをバイト列に変換
-	data := c.encodeMessage(msg)
-
-	// 送信・レスポンス受信（応答がなければ再送）
-	response, _, err := c.roundTrip(addr, data, txID)
-	if err != nil {
-		return nil, err
-	}
-
-	// OTHER-ADDRESSまたはCHANGED-ADDRESSを探す
-	for _, attr := range response.Attributes {
-		if attr.Type == OtherAddress || attr.Type == ChangedAddress {
-			return c.parseAddress(attr.Value, false, response.TransactionID)
-		}
-	}
-
-	return nil, fmt.Errorf("OTHER-ADDRESS not found in response")
 }

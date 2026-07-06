@@ -162,72 +162,123 @@ type CheckMappingResult struct {
 
 // CheckMappingResponseData はマッピング結果の詳細データを含む構造体
 type CheckMappingResponseData struct {
-	MappingA1 *net.UDPAddr `json:"mapping_a1"` // サーバーAからの1回目のマッピング
-	MappingB1 *net.UDPAddr `json:"mapping_b1"` // サーバーBからの1回目のマッピング
-	MappingA2 *net.UDPAddr `json:"mapping_a2"` // サーバーAからの2回目のマッピング
+	OtherAddress *net.UDPAddr `json:"other_address"` // Test I で取得したサーバーの代替アドレス
+	Mapping1     *net.UDPAddr `json:"mapping_1"`     // Test I: 主アドレス宛のマッピング
+	Mapping2     *net.UDPAddr `json:"mapping_2"`     // Test II: 代替IP・主ポート宛のマッピング
+	Mapping3     *net.UDPAddr `json:"mapping_3"`     // Test III: 代替IP・代替ポート宛のマッピング
 }
 
-// CheckMappingType は2つのSTUNサーバーを使ってNATマッピングタイプを判定します
+// CheckMappingType はNATマッピングタイプを判定します
+// RFC 5780 Section 4.3: Determining NAT Mapping Behavior
 //
-// serverA, serverB は "host" または "host:port" 形式で指定します。
+// serverAddr は "host" または "host:port" 形式で指定します。
 // ポートを省略した場合は STUN 標準ポート 3478 が使われます。
-func CheckMappingType(serverA, serverB string) (*CheckMappingResult, error) {
+//
+// AD/APD の区別には「同じサーバーの別 IP・別ポート」宛の送信結果の比較が
+// 必要なため、OTHER-ADDRESS (RFC 5780) をサポートするサーバーが必要です。
+// 非対応サーバーの場合は NATType が Unknown になります。
+//
+//   - Test I:   主アドレス宛に Binding Request（OTHER-ADDRESS も同じ応答から取得）
+//   - Test II:  代替 IP・主ポート宛に Binding Request
+//     マッピングが Test I と同じ → Endpoint Independent
+//   - Test III: 代替 IP・代替ポート宛に Binding Request
+//     マッピングが Test II と同じ → Address Dependent、異なる → Address and Port Dependent
+func CheckMappingType(serverAddr string) (*CheckMappingResult, error) {
 	client, err := NewSTUNClient()
 	if err != nil {
 		return nil, fmt.Errorf("STUNクライアント作成エラー: %w", err)
 	}
 	defer client.Close()
 
-	serverAddrA := withDefaultPort(serverA)
-	serverAddrB := withDefaultPort(serverB)
-
-	// テスト1: サーバーAから基本的なマッピングを取得
-	mappingA1, err := client.SendBindingRequest(serverAddrA, false, false)
+	server := withDefaultPort(serverAddr)
+	serverUDP, err := net.ResolveUDPAddr("udp", server)
 	if err != nil {
-		return nil, fmt.Errorf("サーバーAへのリクエスト失敗: %w", err)
+		return nil, fmt.Errorf("サーバーアドレス解決エラー: %w", err)
 	}
 
-	// テスト2: サーバーBから基本的なマッピングを取得
-	mappingB1, err := client.SendBindingRequest(serverAddrB, false, false)
+	// Test I: 主アドレス宛に Binding Request
+	// RFC 5780 Section 4.3: "the client performs the UDP connectivity check"
+	test1, err := client.SendBindingRequest(server, false, false)
 	if err != nil {
-		return nil, fmt.Errorf("サーバーBへのリクエスト失敗: %w", err)
+		return nil, fmt.Errorf("マッピング Test I 失敗: %w", err)
 	}
 
-	// テスト3: 同じサーバーAに再度リクエスト（一貫性確認）
-	mappingA2, err := client.SendBindingRequest(serverAddrA, false, false)
-	if err != nil {
-		return nil, fmt.Errorf("サーバーAへの2回目リクエスト失敗: %w", err)
-	}
-
-	// マッピングタイプ判定
-	natType := determineNATType(mappingA1, mappingB1, mappingA2)
-
-	return &CheckMappingResult{
-		NATType: natType,
+	result := &CheckMappingResult{
+		NATType: Unknown,
 		Response: CheckMappingResponseData{
-			MappingA1: mappingA1,
-			MappingB1: mappingB1,
-			MappingA2: mappingA2,
+			Mapping1:     test1.MappedAddress,
+			OtherAddress: test1.OtherAddress,
 		},
-	}, nil
+	}
+
+	// Test II/III には「同じサーバーの別 IP」宛の送信が必要。
+	// OTHER-ADDRESS が無い、または主アドレスと IP が同じ場合は判定不可能
+	other := test1.OtherAddress
+	if other == nil || other.IP.Equal(serverUDP.IP) {
+		return result, nil
+	}
+
+	// Test II: 代替 IP・主ポート宛に Binding Request
+	// RFC 5780 Section 4.3: "the client sends a Binding Request to the
+	// alternate address, but primary port"
+	test2Target := (&net.UDPAddr{IP: other.IP, Port: serverUDP.Port}).String()
+	test2, err := client.SendBindingRequest(test2Target, false, false)
+	if err != nil {
+		return result, fmt.Errorf("マッピング Test II 失敗: %w", err)
+	}
+	result.Response.Mapping2 = test2.MappedAddress
+
+	// 宛先 IP が変わってもマッピングが同じ → Endpoint Independent
+	if udpAddrEqual(test1.MappedAddress, test2.MappedAddress) {
+		result.NATType = EndpointIndependent
+		return result, nil
+	}
+
+	// Test III: 代替 IP・代替ポート宛に Binding Request
+	// RFC 5780 Section 4.3: "the client sends a Binding Request to the
+	// alternate address and port"
+	test3, err := client.SendBindingRequest(other.String(), false, false)
+	if err != nil {
+		return result, fmt.Errorf("マッピング Test III 失敗: %w", err)
+	}
+	result.Response.Mapping3 = test3.MappedAddress
+
+	result.NATType = determineNATType(test1.MappedAddress, test2.MappedAddress, test3.MappedAddress)
+	return result, nil
 }
 
-func determineNATType(mappingA1, mappingB1, mappingA2 *net.UDPAddr) NATMappingType {
-	// 同じサーバーへの複数回のリクエストで一貫性をチェック
-	if mappingA1.Port != mappingA2.Port {
-		return AddressPortDependent
+// determineNATType は 3 つのテストで得られた外部マッピングから
+// NATマッピングタイプを判定します (RFC 5780 Section 4.3)
+//
+// mapping1 は主アドレス宛、mapping2 は代替IP・主ポート宛、
+// mapping3 は代替IP・代替ポート宛の送信で得られた外部マッピング。
+// mapping1 と mapping2 が一致する場合、mapping3 は nil でもよい。
+func determineNATType(mapping1, mapping2, mapping3 *net.UDPAddr) NATMappingType {
+	// 宛先 IP が変わってもマッピングが同じ → Endpoint Independent
+	if udpAddrEqual(mapping1, mapping2) {
+		return EndpointIndependent
 	}
 
-	// 異なるサーバーへのリクエストでマッピングを比較
-	if mappingA1.Port == mappingB1.Port {
-		return EndpointIndependent
-	} else {
+	// 宛先 IP が同じままポートだけ変わってもマッピングが同じ → Address Dependent
+	if udpAddrEqual(mapping2, mapping3) {
 		return AddressDependent
 	}
+
+	return AddressPortDependent
+}
+
+// udpAddrEqual は 2 つの UDP アドレスを IP とポートの両方で比較します。
+// ポートのみの比較では、外部 IP プールを持つ CGN などで異なる外部 IP に
+// たまたま同じポートが割り当てられた場合に誤判定するため、必ず IP も比較する。
+func udpAddrEqual(a, b *net.UDPAddr) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.IP.Equal(b.IP) && a.Port == b.Port
 }
 
 // CheckFilteringBehavior はNATフィルタリング動作を判定します
-// RFC 5780 Section 4.3: Determining NAT Filtering Behavior
+// RFC 5780 Section 4.4: Determining NAT Filtering Behavior
 //
 // このテストは、NATがどの条件で外部からのパケットを許可するかを判定します。
 // 3種類のフィルタリング動作（RFC 4787より）：
@@ -247,8 +298,12 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	// RFC 5780: "The client performs a UDP connectivity check by sending
 	//            a STUN Binding Request to the server."
 	// レスポンスに含まれるOTHER-ADDRESSは、サーバーの代替IP:Portを示す
-	// 取得に失敗した場合は otherAddr が nil となり、FilteringUnknown として扱う
-	otherAddr, _ := client.GetAlternateAddress(serverWithPort)
+	// XOR-MAPPED-ADDRESS と同じ Binding Response から 1 往復で取得する
+	test1, err := client.SendBindingRequest(serverWithPort, false, false)
+	if err != nil {
+		return nil, fmt.Errorf("フィルタリング Test I 失敗: %w", err)
+	}
+	otherAddr := test1.OtherAddress
 
 	result := &CheckFilteringResult{
 		ServerSupport: STUNServerSupportInfo{
@@ -353,17 +408,21 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 //
 // この組み合わせにより、以下の9種類のNATタイプに分類されます：
 //   - 3種類のマッピング × 3種類のフィルタリング = 9通り
-func FullNATDetection(serverIpA, serverIpB string) (*FullNATDetectionResult, error) {
+//
+// serverAddr は "host" または "host:port" 形式で指定します。
+// マッピング・フィルタリングとも OTHER-ADDRESS/CHANGE-REQUEST を
+// サポートする RFC 5780 対応サーバー（例: stunserver2025.stunprotocol.org）が必要です。
+func FullNATDetection(serverAddr string) (*FullNATDetectionResult, error) {
 	// Phase 1: マッピング判定
-	// RFC 5780 Section 4.2: Determining NAT Mapping Behavior
-	mappingResult, err := CheckMappingType(serverIpA, serverIpB)
+	// RFC 5780 Section 4.3: Determining NAT Mapping Behavior
+	mappingResult, err := CheckMappingType(serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("マッピング判定エラー: %w", err)
 	}
 
 	// Phase 2: フィルタリング判定
-	// RFC 5780 Section 4.3: Determining NAT Filtering Behavior
-	filteringResult, err := CheckFilteringBehavior(serverIpA)
+	// RFC 5780 Section 4.4: Determining NAT Filtering Behavior
+	filteringResult, err := CheckFilteringBehavior(serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("フィルタリング判定エラー: %w", err)
 	}

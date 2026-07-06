@@ -73,8 +73,8 @@ func (n NATFilteringType) String() string {
 
 // DetailedNATType はマッピングとフィルタリングの組み合わせによる詳細なNATタイプ
 type DetailedNATType struct {
-	Mapping   NATMappingType
-	Filtering NATFilteringType
+	Mapping   NATMappingType   `json:"mapping"`
+	Filtering NATFilteringType `json:"filtering"`
 }
 
 // String はRFC 5780準拠の分類名を返す
@@ -124,29 +124,29 @@ func (d DetailedNATType) LegacyName() string {
 
 // STUNServerSupportInfo はSTUNサーバーの機能サポート情報
 type STUNServerSupportInfo struct {
-	SupportsChangeRequest bool
-	SupportsOtherAddress  bool
+	SupportsChangeRequest bool `json:"supports_change_request"`
+	SupportsOtherAddress  bool `json:"supports_other_address"`
 }
 
 // CheckFilteringResponseData はフィルタリング判定の詳細データ
 type CheckFilteringResponseData struct {
-	OtherAddress    *net.UDPAddr // Test I で取得した代替アドレス
-	TestIIResponse  bool         // Test II (Change IP+Port) で代替IPからのレスポンスを受信したか
-	TestIIIResponse bool         // Test III (Change Port) で同一IP・別ポートからのレスポンスを受信したか
+	OtherAddress    *net.UDPAddr `json:"other_address"`     // Test I で取得した代替アドレス
+	TestIIResponse  bool         `json:"test_ii_response"`  // Test II (Change IP+Port) で代替IPからのレスポンスを受信したか
+	TestIIIResponse bool         `json:"test_iii_response"` // Test III (Change Port) で同一IP・別ポートからのレスポンスを受信したか
 }
 
 // CheckFilteringResult はフィルタリング判定の結果
 type CheckFilteringResult struct {
-	FilteringType NATFilteringType
-	Response      CheckFilteringResponseData
-	ServerSupport STUNServerSupportInfo
+	FilteringType NATFilteringType           `json:"filtering_type"`
+	Response      CheckFilteringResponseData `json:"response"`
+	ServerSupport STUNServerSupportInfo      `json:"server_support"`
 }
 
 // FullNATDetectionResult は包括的なNAT判定結果
 type FullNATDetectionResult struct {
-	DetailedType    DetailedNATType
-	MappingResult   *CheckMappingResult
-	FilteringResult *CheckFilteringResult
+	DetailedType    DetailedNATType       `json:"detailed_type"`
+	MappingResult   *CheckMappingResult   `json:"mapping_result"`
+	FilteringResult *CheckFilteringResult `json:"filtering_result"`
 }
 
 // String は結果の文字列表現を返す

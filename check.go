@@ -131,8 +131,8 @@ type STUNServerSupportInfo struct {
 // CheckFilteringResponseData はフィルタリング判定の詳細データ
 type CheckFilteringResponseData struct {
 	OtherAddress    *net.UDPAddr // Test I で取得した代替アドレス
-	TestIIResponse  bool         // Test II (Change IP+Port) でレスポンスを受信したか
-	TestIIIResponse bool         // Test III (Change Port) でレスポンスを受信したか
+	TestIIResponse  bool         // Test II (Change IP+Port) で代替IPからのレスポンスを受信したか
+	TestIIIResponse bool         // Test III (Change Port) で同一IP・別ポートからのレスポンスを受信したか
 }
 
 // CheckFilteringResult はフィルタリング判定の結果
@@ -293,6 +293,10 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	defer client.Close()
 
 	serverWithPort := withDefaultPort(serverAddr)
+	serverUDP, err := net.ResolveUDPAddr("udp", serverWithPort)
+	if err != nil {
+		return nil, fmt.Errorf("サーバーアドレス解決エラー: %w", err)
+	}
 
 	// Test I: 基本的なBinding Requestを送信し、OTHER-ADDRESSを取得
 	// RFC 5780: "The client performs a UDP connectivity check by sending
@@ -314,8 +318,10 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 		},
 	}
 
-	// OTHER-ADDRESSが取得できない場合、フィルタリング判定は不可能
-	if otherAddr == nil {
+	// OTHER-ADDRESSが取得できない場合、フィルタリング判定は不可能。
+	// また Test II では「代替 IP からの応答」を確認する必要があるため、
+	// 代替アドレスの IP が主アドレスと同じ場合も判定不可能
+	if otherAddr == nil || otherAddr.IP.Equal(serverUDP.IP) {
 		result.FilteringType = FilteringUnknown
 		return result, nil
 	}
@@ -324,15 +330,26 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	// RFC 5780: "The client sends a Binding Request to the server,
 	//            with both the 'change IP' and 'change port' flags set."
 	// サーバーは代替IP:Portから応答を送信する
-	// レスポンスを受信 → Endpoint-Independent Filtering
+	// 代替IPからのレスポンスを受信 → Endpoint-Independent Filtering
 	// タイムアウト → Test IIIへ進む
-	testIIAddr, testIIErr := client.SendBindingRequest(serverWithPort, true, true)
-	result.Response.TestIIResponse = (testIIErr == nil && testIIAddr != nil)
+	testII, testIIErr := client.SendBindingRequest(serverWithPort, true, true)
 
-	// Test II でレスポンスがあった場合: Endpoint Independent Filtering
-	if result.Response.TestIIResponse {
-		result.FilteringType = EndpointIndependentFiltering
-		result.ServerSupport.SupportsChangeRequest = true
+	if testIIErr == nil {
+		// 応答が本当に「代替 IP」から来たことを検証する。
+		// RFC 5780 は、OTHER-ADDRESS を返しつつ CHANGE-REQUEST を無視して
+		// 主アドレスから応答するサーバーに対して、応答の送信元を確認せずに
+		// Endpoint Independent Filtering と誤判定する危険を明示的に警告している
+		if testII.ResponseFrom != nil && testII.ResponseFrom.IP.Equal(otherAddr.IP) {
+			result.Response.TestIIResponse = true
+			result.FilteringType = EndpointIndependentFiltering
+			result.ServerSupport.SupportsChangeRequest = true
+			return result, nil
+		}
+
+		// 主アドレスから応答が返った: CHANGE-REQUEST を無視するサーバーであり、
+		// フィルタリング判定の根拠にできない
+		result.FilteringType = FilteringUnknown
+		result.ServerSupport.SupportsChangeRequest = false
 		return result, nil
 	}
 
@@ -341,7 +358,7 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	//     → CHANGE-REQUEST 非対応サーバーと判断し、フィルタリング判定は不可能
 	//   - タイムアウト → Test III に進む（正常な動作）
 	//   - それ以外（ICMP unreachable、デコード失敗等）→ 判定不能としてエラーを返す
-	if testIIErr != nil {
+	{
 		var stunErr *STUNError
 		switch {
 		case errors.As(testIIErr, &stunErr):
@@ -359,20 +376,29 @@ func CheckFilteringBehavior(serverAddr string) (*CheckFilteringResult, error) {
 	// RFC 5780: "The client sends a Binding Request with only
 	//            the 'change port' flag set."
 	// サーバーは同じIPの異なるポートから応答を送信する
-	// レスポンスを受信 → Address-Dependent Filtering
+	// 同じIP・異なるポートからのレスポンスを受信 → Address-Dependent Filtering
 	// タイムアウト → Address and Port-Dependent Filtering
-	testIIIAddr, testIIIErr := client.SendBindingRequest(serverWithPort, false, true)
-	result.Response.TestIIIResponse = (testIIIErr == nil && testIIIAddr != nil)
+	testIII, testIIIErr := client.SendBindingRequest(serverWithPort, false, true)
 
-	// Test III でレスポンスがあった場合: Address Dependent Filtering
-	if result.Response.TestIIIResponse {
-		result.FilteringType = AddressDependentFiltering
-		result.ServerSupport.SupportsChangeRequest = true
+	if testIIIErr == nil {
+		// 応答が「主アドレスと同じ IP・異なるポート」から来たことを検証する
+		if testIII.ResponseFrom != nil &&
+			testIII.ResponseFrom.IP.Equal(serverUDP.IP) &&
+			testIII.ResponseFrom.Port != serverUDP.Port {
+			result.Response.TestIIIResponse = true
+			result.FilteringType = AddressDependentFiltering
+			result.ServerSupport.SupportsChangeRequest = true
+			return result, nil
+		}
+
+		// 主アドレス:主ポートから応答が返った: CHANGE-REQUEST を無視するサーバー
+		result.FilteringType = FilteringUnknown
+		result.ServerSupport.SupportsChangeRequest = false
 		return result, nil
 	}
 
 	// Test III のエラー分類（Test II と同様）
-	if testIIIErr != nil {
+	{
 		var stunErr *STUNError
 		switch {
 		case errors.As(testIIIErr, &stunErr):

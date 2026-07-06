@@ -156,12 +156,16 @@ func (f FullNATDetectionResult) String() string {
 
 // CheckMappingResult はNATマッピングタイプ判定の結果を含む構造体
 type CheckMappingResult struct {
-	NATType  NATMappingType           `json:"nat_type"`
+	NATType NATMappingType `json:"nat_type"`
+	// NoNAT は外部マッピングがローカルアドレスと一致した
+	// （クライアントとサーバーの間に NAT が存在しない）場合に true
+	NoNAT    bool                     `json:"no_nat"`
 	Response CheckMappingResponseData `json:"response"`
 }
 
 // CheckMappingResponseData はマッピング結果の詳細データを含む構造体
 type CheckMappingResponseData struct {
+	LocalAddress *net.UDPAddr `json:"local_address"` // クライアントのローカルアドレス
 	OtherAddress *net.UDPAddr `json:"other_address"` // Test I で取得したサーバーの代替アドレス
 	Mapping1     *net.UDPAddr `json:"mapping_1"`     // Test I: 主アドレス宛のマッピング
 	Mapping2     *net.UDPAddr `json:"mapping_2"`     // Test II: 代替IP・主ポート宛のマッピング
@@ -209,6 +213,20 @@ func CheckMappingType(serverAddr string) (*CheckMappingResult, error) {
 			Mapping1:     test1.MappedAddress,
 			OtherAddress: test1.OtherAddress,
 		},
+	}
+
+	// NAT の有無を確認: 外部マッピングがローカルアドレスと一致すれば、
+	// クライアントとサーバーの間に NAT は存在しない
+	// RFC 5780 Section 4.3: "If the XOR-MAPPED-ADDRESS attribute in the Binding
+	// Response is the same as the local address and port, then there is no NAT"
+	// この場合、マッピングは定義上 Endpoint Independent となる
+	if localAddr, localErr := client.LocalAddr(serverUDP); localErr == nil {
+		result.Response.LocalAddress = localAddr
+		if udpAddrEqual(test1.MappedAddress, localAddr) {
+			result.NoNAT = true
+			result.NATType = EndpointIndependent
+			return result, nil
+		}
 	}
 
 	// Test II/III には「同じサーバーの別 IP」宛の送信が必要。

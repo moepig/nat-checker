@@ -223,6 +223,8 @@ func TestCheckMappingTypeIntegration(t *testing.T) {
 	t.Logf("=== Mapping Detection Test ===")
 	t.Logf("Server: %s", server)
 	t.Logf("Detected NAT mapping type: %s", result.NATType)
+	t.Logf("NoNAT: %v", result.NoNAT)
+	t.Logf("LocalAddress: %s", result.Response.LocalAddress)
 	t.Logf("OtherAddress: %s", result.Response.OtherAddress)
 	t.Logf("Mapping1: %s", result.Response.Mapping1)
 	t.Logf("Mapping2: %s", result.Response.Mapping2)

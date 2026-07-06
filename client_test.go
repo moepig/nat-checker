@@ -19,6 +19,21 @@ func TestSTUNClientCreation(t *testing.T) {
 	assert.NotNil(t, client.conn, "STUNClient connection should not be nil")
 }
 
+func TestLocalAddr(t *testing.T) {
+	client, err := NewSTUNClient()
+	require.NoError(t, err, "NewSTUNClient() should not fail")
+	defer client.Close()
+
+	// ループバック宛の送信元はループバックアドレスになる
+	server := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3478}
+	localAddr, err := client.LocalAddr(server)
+	require.NoError(t, err, "LocalAddr() should not fail")
+
+	assert.True(t, localAddr.IP.IsLoopback(), "local IP toward loopback should be loopback")
+	assert.Equal(t, client.conn.LocalAddr().(*net.UDPAddr).Port, localAddr.Port,
+		"port should be the client's bound port")
+}
+
 func TestSTUNMessageEncoding(t *testing.T) {
 	client, err := NewSTUNClient()
 	require.NoError(t, err, "NewSTUNClient() should not fail")

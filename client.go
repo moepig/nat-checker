@@ -160,6 +160,25 @@ func (c *STUNClient) Close() {
 	}
 }
 
+// LocalAddr は server へ送信する際に使われるローカル IP と、クライアントが
+// バインドしているポートの組を返します。
+//
+// conn は ":0"（全インターフェース・任意ポート）にバインドされているため
+// conn.LocalAddr() だけでは送信元 IP が分からない。実際の送信元 IP は
+// 宛先へのルーティングで決まるので、プローブ用の接続で解決する。
+func (c *STUNClient) LocalAddr(server *net.UDPAddr) (*net.UDPAddr, error) {
+	probe, err := net.DialUDP("udp", nil, server)
+	if err != nil {
+		return nil, err
+	}
+	defer probe.Close()
+
+	return &net.UDPAddr{
+		IP:   probe.LocalAddr().(*net.UDPAddr).IP,
+		Port: c.conn.LocalAddr().(*net.UDPAddr).Port,
+	}, nil
+}
+
 // BindingResult は Binding トランザクション 1 往復で得られる情報
 type BindingResult struct {
 	// MappedAddress はクライアントの外部アドレス
